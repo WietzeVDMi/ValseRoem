@@ -231,3 +231,31 @@ main { padding: 1em; max-width: 1400px; margin: 0 auto; }
   .backs .card.back { margin-left: -30px; }
   .seat.west .backs .card.back, .seat.east .backs .card.back { margin-top: -46px; }
 }
+
+/* ---------- kaarten-informatieblad ---------- */
+.infobox { max-width: 1100px; margin: 0 auto; }
+.infobox h2 { font-size: 1.6rem; }
+.infobox p { font-size: 1.1rem; margin: .3em 0; }
+.trumppick { display: flex; flex-wrap: wrap; gap: .5em; margin-bottom: 1em; }
+.trumppick button { font-size: 1.25rem; padding: .5em 1em; }
+.trumppick .red, .infosuit h3 .red { color: #c21f1f; }
+.trumppick button.primary .red { color: #ffd6d6; }
+.infogrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1em; }
+.infosuit { border: 2px solid var(--line); border-radius: 12px; padding: .7em .8em; background: #fff; }
+.infosuit.istrump { border-color: #d7a800; background: #fffbea; }
+.infosuit h3 { font-size: 1.35rem; display: flex; align-items: center; gap: .4em; }
+.infosuit h3 .tag { font-size: .8rem; background: #ffd35c; color: #222; border-radius: 4px; padding: 0 .4em; }
+.inforows { display: flex; flex-direction: column; gap: .35em; }
+.inforow { display: grid; grid-template-columns: 1.4em auto 1fr auto; align-items: center; gap: .6em; }
+.inforow .rank { color: var(--muted); font-size: .9rem; text-align: right; }
+.inforow .card { --card-w: 44px; --card-h: 62px; padding: 3px 4px; }
+.inforow .card .r { font-size: 1rem; } .inforow .card .s { font-size: 1.3rem; } .inforow .card .r2 { font-size: .8rem; }
+.inforow .nm { font-size: 1.1rem; }
+.inforow .pts { font-size: 1.7rem; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 1.6em; text-align: right; }
+.inforow .pts.zero { color: var(--muted); font-weight: 400; }
+.infototal { margin-top: .5em; color: var(--muted); text-align: right; }
+.inforules { margin-top: 1.2em; display: grid; gap: .6em; font-size: 1.05rem; }
+@media (max-width: 640px) {
+  .infogrid { grid-template-columns: 1fr; }
+  .trumppick button { flex: 1 1 40%; }
+}

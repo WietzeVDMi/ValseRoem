@@ -324,6 +324,34 @@
   $('#btn-newboom').addEventListener('click', () => { if (!game || game.phase === 'gameover' || confirm('Huidige boom afbreken en een nieuwe beginnen?')) startBoom(); });
 
   /* =====================================================================
+     KAARTEN: informatieblad punten per kaart
+     ===================================================================== */
+  let infoTrump = (() => { try { return localStorage.getItem('vr_infotrump') || 'S'; } catch (e) { return 'S'; } })();
+  function renderKaarten() {
+    const root = $('#kaarten');
+    const trump = infoTrump;
+    const order = (s) => (s === trump ? ['J', '9', 'A', 'T', 'K', 'Q', '8', '7'] : ['A', 'T', 'K', 'Q', 'J', '9', '8', '7']);
+    const suits = [trump].concat(KJ.SUITS.filter((s) => s !== trump));
+    const col = (s) => {
+      const isT = s === trump;
+      return `<div class="infosuit ${isT ? 'istrump' : ''}"><h3><span class="${KJ.SUIT_RED[s] ? 'red' : ''}">${KJ.SUIT_SYMBOL[s]}</span> ${KJ.SUIT_NAME[s]}${isT ? ' <span class="tag">troef</span>' : ''}</h3>
+        <div class="inforows">${order(s).map((r, i) => { const c = s + r; const v = KJ.value(c, trump); return `<div class="inforow"><span class="rank">${i + 1}</span>${cardHtml(c, '', null)}<span class="nm">${KJ.RANK_NAME[r]}${isT && r === 'J' ? ' (boer)' : isT && r === '9' ? ' (nel)' : ''}</span><span class="pts ${v ? '' : 'zero'}">${v}</span></div>`; }).join('')}</div>
+        <div class="infototal">samen ${order(s).reduce((a, r) => a + KJ.value(s + r, trump), 0)} punten</div></div>`;
+    };
+    root.innerHTML = `<div class="box infobox">
+      <h2>Punten per kaart</h2>
+      <p>Welke kleur is troef?</p>
+      <div class="trumppick">${KJ.SUITS.map((s) => `<button data-trump="${s}" class="${s === trump ? 'primary' : ''}"><span class="${KJ.SUIT_RED[s] ? 'red' : ''}">${KJ.SUIT_SYMBOL[s]}</span> ${KJ.SUIT_NAME[s]}</button>`).join('')}</div>
+      <div class="infogrid">${suits.map(col).join('')}</div>
+      <div class="inforules">
+        <div><b>Volgorde</b>: hoogste bovenaan. In troef winnen boer en nel van alles; in de andere kleuren is de aas het hoogst en staat de boer pas op de vijfde plaats.</div>
+        <div><b>Totaal</b>: alle kaarten samen 152 punten, de laatste slag 10 extra = <b>162</b>. De spelende partij heeft minimaal <b>82</b> nodig.</div>
+        <div><b>Roem</b> (in één slag): drie opeenvolgende van één kleur 20 · vier opeenvolgende 50 · troefheer + troefvrouw (stuk) 20 · vier dezelfde (10, V, H, A) 100 · vier boeren 200 · alle slagen (pit) 100. Voor reeksen telt de gewone volgorde 7-8-9-10-B-V-H-A, ook in troef.</div>
+      </div></div>`;
+    $$('button[data-trump]', root).forEach((b) => b.addEventListener('click', () => { infoTrump = b.dataset.trump; try { localStorage.setItem('vr_infotrump', infoTrump); } catch (e) {} renderKaarten(); }));
+  }
+
+  /* =====================================================================
      LESSEN
      ===================================================================== */
   function renderLessons() {
@@ -825,6 +853,7 @@
   }
 
   /* ---------- start ---------- */
+  renderKaarten();
   renderLessons();
   renderScenarios();
   const drillInit = { bied: renderBidDrill, zet: renderMoveDrill, tel: renderCountDrill };
