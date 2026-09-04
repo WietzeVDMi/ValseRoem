@@ -10,6 +10,14 @@ docker compose up -d --build
 
 Open daarna http://localhost:8790. Zonder Docker: open `index.html` direct in de browser (geen build nodig).
 
+Kant-en-klaar image (wordt bij elke push naar `main` gebouwd door GitHub Actions, voor amd64 en arm64):
+
+```bash
+docker run -d --name valse-roem -p 8790:80 ghcr.io/wietzevdmi/valseroem:latest
+```
+
+Image als bestand delen: `docker save valse-roem:latest | gzip > valse-roem-image.tar.gz`, de ontvanger doet `docker load < valse-roem-image.tar.gz` en `docker run -d -p 8790:80 valse-roem:latest`.
+
 ## Wat zit erin
 
 - **Spelen**: volledige boom van 16 spellen tegen AI-spelers. Niveau van je maat en van de tegenstanders apart instelbaar (goed / gemiddeld / slecht). De coach beoordeelt elke zet met een Monte-Carlo-simulatie, legt uit waarom een kaart beter was en houdt rekening met het niveau van je maat. Knop **Hint** geeft advies vooraf.
