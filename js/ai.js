@@ -385,6 +385,10 @@
     return { card: best.card, evals, reason: hs ? hs.reason : h.reason, heuristic: h };
   };
 
+  // View overdraagbaar maken (Sets -> arrays) voor een Web Worker
+  AI.viewToJSON = (v) => Object.assign({}, v, { voids: v.voids.map((x) => Array.from(x)) });
+  AI.viewFromJSON = (j) => Object.assign({}, j, { voids: j.voids.map((x) => new Set(x)) });
+
   // Kaartkeuze voor een AI-zetel
   AI.chooseCard = function (game, seat, level, policies, rng) {
     const cfg = AI.LEVELS[level] || AI.LEVELS.gemiddeld;

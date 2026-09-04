@@ -33,6 +33,32 @@
   const levelOf = (seat) => (seat === 0 ? null : seat === 2 ? settings.partnerLevel : settings.oppLevel);
   const teamName = (t) => (t === 0 ? `${settings.names[0]} & ${settings.names[2]}` : `${settings.names[1]} & ${settings.names[3]}`);
 
+  /* ---------- rekenwerk: Web Worker met terugval naar de hoofdthread ---------- */
+  const Engine = (() => {
+    let worker = null, seq = 0;
+    const pendingCalls = {};
+    const sync = (op, p) => (op === 'analyze' ? Coach.analyzeMove(p.view, p.policies, p.samples) : { card: AI.monteCarlo(p.view, { samples: p.samples, policies: p.policies }).card });
+    const fallbackAll = () => { for (const id in pendingCalls) { const c = pendingCalls[id]; delete pendingCalls[id]; c.resolve(sync(c.op, c.payload)); } };
+    try {
+      if (location.protocol !== 'file:' && typeof Worker !== 'undefined') {
+        worker = new Worker('js/worker.js');
+        worker.onmessage = (e) => { const c = pendingCalls[e.data.id]; delete pendingCalls[e.data.id]; if (!c) return; if (e.data.result && e.data.result.error) c.resolve(sync(c.op, c.payload)); else c.resolve(e.data.result); };
+        worker.onerror = () => { worker = null; fallbackAll(); };
+      }
+    } catch (e) { worker = null; }
+    const call = (op, payload) => new Promise((resolve) => {
+      if (!worker) { resolve(sync(op, payload)); return; }
+      const id = ++seq;
+      pendingCalls[id] = { resolve, op, payload };
+      worker.postMessage({ id, op, view: AI.viewToJSON(payload.view), policies: payload.policies, samples: payload.samples });
+    });
+    return {
+      analyze: (view, policies, samples) => call('analyze', { view, policies, samples }),
+      choose: (view, policies, samples) => call('choose', { view, policies, samples }),
+      hasWorker: () => !!worker,
+    };
+  })();
+
   /* ---------- kaart-html ---------- */
   function cardHtml(c, cls, trump) {
     const red = KJ.SUIT_RED[c[0]] ? ' red' : '';
@@ -59,7 +85,7 @@
   /* =====================================================================
      SPELEN
      ===================================================================== */
-  let game = null, gen = 0, reviews = [], pending = null, shownTrick = null, hintCard = null, busy = false, waiting = false, timer = null;
+  let game = null, gen = 0, reviews = [], pendingReviews = [], pending = null, shownTrick = null, hintCard = null, busy = false, waiting = false, timer = null;
 
   function log(type, html, situation) {
     const el = document.createElement('div');
@@ -80,7 +106,7 @@
 
   function startDeal() {
     game.newDeal();
-    reviews = []; pending = null; shownTrick = null; hintCard = null;
+    reviews = []; pendingReviews = []; pending = null; shownTrick = null; hintCard = null; busy = false; waiting = false;
     log('result', `<b>Spel ${game.dealNo}.</b> ${esc(settings.names[game.dealer])} deelt, ${esc(settings.names[game.chooser])} is kiezer. Gedraaid: ${suitHtml(game.proposed)}${game.turnCard ? ' (' + lab(game.turnCard) + ' van de deler)' : ''}.`);
     render();
     schedule(advance, settings.speed);
@@ -105,9 +131,14 @@
     }
     if (game.phase === 'playing') {
       if (game.turn === 0) { waiting = true; prepareUserTurn(); render(); return; }
-      const seat = game.turn;
-      const card = AI.chooseCard(game, seat, levelOf(seat), policies());
-      playCard(seat, card);
+      const seat = game.turn, level = levelOf(seat), cfg = AI.LEVELS[level];
+      if (cfg.mc) {
+        const g = gen, dealNo = game.dealNo, n = game.played.length;
+        Engine.choose(game.view(seat), policies(), cfg.samples).then((r) => {
+          if (g !== gen || !game || game.dealNo !== dealNo || game.played.length !== n || game.turn !== seat) return;
+          playCard(seat, r.card);
+        });
+      } else playCard(seat, AI.policyMove(game.view(seat), level));
       return;
     }
   }
@@ -120,29 +151,34 @@
     pending = null;
     if (!settings.coachAuto) return;
     const v = game.view(0);
-    const g = gen, dealNo = game.dealNo, trickNo = game.tricks.length, n = game.trick.length;
-    setTimeout(() => {
-      if (g !== gen || !game || game.dealNo !== dealNo || game.tricks.length !== trickNo || game.trick.length !== n || game.turn !== 0) return;
-      pending = { key: dealNo + ':' + trickNo + ':' + n, an: Coach.analyzeMove(v, policies(), settings.samples), v };
-    }, 30);
+    pending = { key: game.dealNo + ':' + game.tricks.length + ':' + game.trick.length, promise: Engine.analyze(v, policies(), settings.samples) };
   }
 
   function playCard(seat, card) {
     busy = true;
-    let review = null;
     if (seat === 0 && settings.coachAuto) {
       const key = game.dealNo + ':' + game.tricks.length + ':' + game.trick.length;
       const v = game.view(0);
-      const an = pending && pending.key === key ? pending.an : Coach.analyzeMove(v, policies(), settings.samples);
-      review = Coach.review(v, an, card, policies());
-      reviews.push(review);
-      stats.moves++;
-      if (review.grade !== 'goed') stats.mistakes[review.cat] = (stats.mistakes[review.cat] || 0) + 1;
-      save('vr_stats', stats);
+      const promise = pending && pending.key === key ? pending.promise : Engine.analyze(v, policies(), settings.samples);
+      const g = gen;
+      const pol = policies();
+      pendingReviews.push(promise.then((an) => {
+        if (g !== gen) return;
+        try {
+          const review = Coach.review(v, an, card, pol);
+          reviews.push(review);
+          stats.moves++;
+          if (review.grade !== 'goed') { stats.mistakes[review.cat] = (stats.mistakes[review.cat] || 0) + 1; stats.moveMistakes = (stats.moveMistakes || 0) + 1; }
+          save('vr_stats', stats);
+          log(review.grade, `<span class="grade">${review.grade === 'goed' ? '✓' : review.grade === 'fout' ? '✗' : '~'}</span> ${rich(review.text)}`, review.situation);
+        } catch (err) {
+          console.error('beoordeling mislukt', err);
+          log('info', 'De coach kon deze zet niet beoordelen (' + esc(err.message) + ').');
+        }
+      }));
     }
     const done = game.play(seat, card);
     hintCard = null; pending = null;
-    if (review) log(review.grade, `<span class="grade">${review.grade === 'goed' ? '✓' : review.grade === 'fout' ? '✗' : '~'}</span> ${rich(review.text)}`, review.situation);
     if (done) {
       shownTrick = done;
       const who = done.winner === 0 ? 'Jij wint' : `${esc(settings.names[done.winner])} wint`;
@@ -158,8 +194,14 @@
 
   function endDeal() {
     const r = game.lastResult;
-    const lines = Coach.dealSummary(game, 0, reviews);
-    log('result', `<b>Uitslag spel ${r.dealNo}: ${r.score[0]} – ${r.score[1]}.</b><br>${lines.map(rich).join('<br>')}`);
+    const g = gen, gm = game, rv = reviews;
+    // wacht (kort) op lopende beoordelingen, zodat de samenvatting compleet is
+    const settled = Promise.race([Promise.allSettled(pendingReviews), new Promise((res) => setTimeout(res, 4000))]);
+    settled.then(() => {
+      if (g !== gen) return;
+      const lines = Coach.dealSummary(r, 0, rv);
+      log('result', `<b>Uitslag spel ${r.dealNo}: ${r.score[0]} – ${r.score[1]}.</b><br>${lines.map(rich).join('<br>')}`);
+    });
     stats.deals++;
     if (r.score[0] > r.score[1]) stats.dealsWon++;
     if (r.nat) { if (KJ.team(r.playerSeat) === 0) stats.natOwn++; else stats.natOpp++; }
@@ -167,7 +209,7 @@
     if (game.phase === 'gameover') {
       stats.booms++;
       if (game.scores[0] > game.scores[1]) stats.boomsWon++;
-      log('result', `<b>Boom afgelopen: ${game.scores[0]} – ${game.scores[1]}.</b> ${game.scores[0] > game.scores[1] ? 'Gewonnen!' : game.scores[0] < game.scores[1] ? 'Verloren.' : 'Gelijk.'}`);
+      settled.then(() => { if (g === gen) log('result', `<b>Boom afgelopen: ${gm.scores[0]} – ${gm.scores[1]}.</b> ${gm.scores[0] > gm.scores[1] ? 'Gewonnen!' : gm.scores[0] < gm.scores[1] ? 'Verloren.' : 'Gelijk.'}`); });
     }
     save('vr_stats', stats);
     render();
@@ -249,8 +291,8 @@
       html += renderBidBox();
     } else if (game.phase === 'bidding') msg = `${esc(settings.names[game.turn])} denkt na...`;
     else if (game.phase === 'playing' && game.turn === 0 && !shownTrick) msg = game.trick.length ? 'Jij bent aan de beurt.' : 'Jij komt uit.';
-    else if (game.phase === 'dealdone') msg = `<div>Spel ${game.dealNo} klaar: ${game.lastResult.score[0]} – ${game.lastResult.score[1]}${game.lastResult.nat ? ' (nat)' : ''}</div><button class="primary" id="btn-next">Volgende spel</button>`;
-    else if (game.phase === 'gameover') msg = `<div>Boom klaar: ${game.scores[0]} – ${game.scores[1]}</div><button class="primary" id="btn-next">Nieuwe boom</button>`;
+    else if (game.phase === 'dealdone' && !shownTrick) msg = `<div>Spel ${game.dealNo} klaar: ${game.lastResult.score[0]} – ${game.lastResult.score[1]}${game.lastResult.nat ? ' (nat)' : ''}</div><button class="primary" id="btn-next">Volgende spel</button>`;
+    else if (game.phase === 'gameover' && !shownTrick) msg = `<div>Boom klaar: ${game.scores[0]} – ${game.scores[1]}</div><button class="primary" id="btn-next">Nieuwe boom</button>`;
     if (msg) html += `<div class="msg">${msg}</div>`;
     el.innerHTML = html;
     const nb = $('#btn-next');
@@ -311,14 +353,20 @@
     if (game.phase === 'bidding' && game.turn === 0) { showBidAdvice(); return; }
     if (game.phase !== 'playing' || game.turn !== 0 || busy || !waiting) return;
     const v = game.view(0);
-    const h = Coach.hint(v, policies(), settings.samples);
     const key = game.dealNo + ':' + game.tricks.length + ':' + game.trick.length;
-    pending = { key, an: h.analysis, v };
-    hintCard = h.best.card;
+    const promise = pending && pending.key === key ? pending.promise : Engine.analyze(v, policies(), Math.max(settings.samples, 40));
+    pending = { key, promise };
     stats.hints++; save('vr_stats', stats);
-    const ev = h.analysis.evals.map((e) => `<span class="${e.card === h.best.card ? 'best' : ''}">${KJ.label(e.card)} ${e.ev >= 0 ? '+' : ''}${Math.round(e.ev)}</span>`).join('');
-    log('hint', `<b>Hint.</b> ${rich(h.lines.slice(1).join(' '))}<div class="evals">${ev}</div>`, h.lines[0]);
-    renderSeat(0);
+    const g = gen;
+    log('hint', '<b>Hint.</b> Even rekenen...');
+    const el = $('#coachlog').lastElementChild;
+    promise.then((an) => {
+      if (g !== gen) return;
+      const h = Coach.hint(v, policies(), settings.samples, an);
+      const ev = an.evals.map((e) => `<span class="${e.card === h.best.card ? 'best' : ''}">${KJ.label(e.card)} ${e.ev >= 0 ? '+' : ''}${Math.round(e.ev)}</span>`).join('');
+      el.innerHTML = `<b>Hint.</b> ${rich(h.lines.slice(1).join(' '))}<div class="evals">${ev}</div><span class="sit">${rich(h.lines[0])}</span>`;
+      if (game && game.phase === 'playing' && game.turn === 0 && waiting && game.dealNo + ':' + game.tricks.length + ':' + game.trick.length === key) { hintCard = h.best.card; renderSeat(0); }
+    });
   });
   $('#btn-tricks').addEventListener('click', () => { const el = $('#tricklist'); el.hidden = !el.hidden; });
   $('#btn-newboom').addEventListener('click', () => { if (!game || game.phase === 'gameover' || confirm('Huidige boom afbreken en een nieuwe beginnen?')) startBoom(); });
@@ -423,11 +471,14 @@
       $$('.hand .card.legal', root).forEach((el) => el.addEventListener('click', () => {
         const card = el.dataset.card;
         const v = Quiz.buildView(sc);
-        const an = Coach.analyzeMove(v, ['goed', 'goed', 'goed', 'goed'], 60);
         const ok = sc.answers.includes(card);
         markScenario(sc.id, ok);
+        $('#scen-fb').innerHTML = `<div class="feedback ${ok ? 'goed' : 'fout'}"><b>${ok ? 'Goed: ' + KJ.label(card) + '.' : KJ.label(card) + ' is niet de beste kaart. Beter: ' + sc.answers.map(KJ.label).join(' of ') + '.'}</b> ${rich(sc.explanation)}<div class="evals">Even rekenen...</div></div>`;
+        Engine.analyze(v, ['goed', 'goed', 'goed', 'goed'], 60).then((an) => {
+        if (!$('#scen-fb') || Quiz.SCENARIOS[scenIdx] !== sc) return;
         const ev = an.evals.map((e) => `<span class="${sc.answers.includes(e.card) ? 'best' : ''}">${KJ.label(e.card)} ${e.ev >= 0 ? '+' : ''}${Math.round(e.ev)}</span>`).join('');
         $('#scen-fb').innerHTML = `<div class="feedback ${ok ? 'goed' : 'fout'}"><b>${ok ? 'Goed: ' + KJ.label(card) + '.' : KJ.label(card) + ' is niet de beste kaart. Beter: ' + sc.answers.map(KJ.label).join(' of ') + '.'}</b> ${rich(sc.explanation)}<div class="evals">${ev}</div><small>Verwachte puntenwinst per kaart volgens de simulatie (gemiddeld verschil voor jullie over de rest van het spel).</small></div>`;
+        });
       }));
     }
   }
@@ -482,13 +533,15 @@
       $('#zet-next').addEventListener('click', renderMoveDrill);
       $$('.hand .card.legal', root).forEach((el) => el.addEventListener('click', () => {
         const card = el.dataset.card;
-        const an = Coach.analyzeMove(v, policies(), Math.max(60, settings.samples));
-        const rv = Coach.review(v, an, card, policies());
-        const ok = rv.grade === 'goed';
-        stats.drills.zet[0] += ok ? 1 : 0; stats.drills.zet[1]++; save('vr_stats', stats);
-        const ev = an.evals.map((e) => `<span class="${e.card === an.best.card ? 'best' : ''}">${KJ.label(e.card)} ${e.ev >= 0 ? '+' : ''}${Math.round(e.ev)}</span>`).join('');
-        $('#zet-fb').innerHTML = `<div class="feedback ${rv.grade}">${rich(rv.text)}<div class="evals">${ev}</div></div>`;
         $$('.hand .card', root).forEach((x) => x.classList.remove('legal'));
+        $('#zet-fb').innerHTML = '<div class="feedback">Even rekenen...</div>';
+        Engine.analyze(v, policies(), Math.max(60, settings.samples)).then((an) => {
+          const rv = Coach.review(v, an, card, policies());
+          const ok = rv.grade === 'goed';
+          stats.drills.zet[0] += ok ? 1 : 0; stats.drills.zet[1]++; save('vr_stats', stats);
+          const ev = an.evals.map((e) => `<span class="${e.card === an.best.card ? 'best' : ''}">${KJ.label(e.card)} ${e.ev >= 0 ? '+' : ''}${Math.round(e.ev)}</span>`).join('');
+          if ($('#zet-fb')) $('#zet-fb').innerHTML = `<div class="feedback ${rv.grade}">${rich(rv.text)}<div class="evals">${ev}</div></div>`;
+        });
       }));
     }, 20);
   }
@@ -796,7 +849,7 @@
         ${row('Roem tegen per spel', s.deals ? (s.roemAgainst / s.deals).toFixed(1) : '–')}
         ${row('Roem voor per spel', s.deals ? (s.roemFor / s.deals).toFixed(1) : '–')}
         ${row('Zetten beoordeeld', s.moves)}
-        ${row('Foutloze zetten', pct(s.moves - mistakes.reduce((a, m) => a + m[1], 0), s.moves))}
+        ${row('Foutloze zetten', pct(s.moves - (s.moveMistakes || 0), s.moves))}
         ${row('Hints gebruikt', s.hints)}
       </div>
       <div class="box"><h3>Verbeterpunten</h3>
@@ -851,6 +904,9 @@
       if (game) render();
     });
   }
+
+  // debug-haakje (alleen lezen)
+  window.ValseRoem = { get game() { return game; }, status: () => ({ phase: game && game.phase, turn: game && game.turn, waiting, busy, shownTrick: !!shownTrick, pendingReviews: pendingReviews.length, reviews: reviews.length, worker: Engine.hasWorker() }) };
 
   /* ---------- start ---------- */
   renderKaarten();

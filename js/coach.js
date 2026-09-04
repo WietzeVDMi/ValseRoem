@@ -145,8 +145,8 @@
     return { mc, reasons, evals: mc.evals, best: mc.evals[0] };
   };
 
-  Coach.hint = function (v, policies, samples) {
-    const an = Coach.analyzeMove(v, policies, samples);
+  Coach.hint = function (v, policies, samples, analysis) {
+    const an = analysis || Coach.analyzeMove(v, policies, samples);
     const d = Coach.describe(v);
     const best = an.best;
     const lines = [d.text];
@@ -216,8 +216,7 @@
   };
 
   /* Samenvatting van een spel: roem tegen, nat, fouten */
-  Coach.dealSummary = function (game, myTeam, reviews) {
-    const r = game.lastResult;
+  Coach.dealSummary = function (r, myTeam, reviews) {
     const opp = 1 - myTeam;
     const lines = [];
     const playing = KJ.team(r.playerSeat) === myTeam;

@@ -220,7 +220,7 @@
         if (g.turn === 0 && g.tricks.length >= targetTrick && g.legalMoves(0).length >= 2) {
           return { game: g, view: g.view(0), policies };
         }
-        g.play(g.turn, AI.chooseCard(g, g.turn, g.turn === 0 ? 'goed' : policies[g.turn], policies, rng));
+        g.play(g.turn, AI.policyMove(g.view(g.turn), g.turn === 0 ? 'heuristiek' : (policies[g.turn] === 'goed' ? 'heuristiek' : policies[g.turn]), rng));
       }
     }
     return null;
