@@ -1,0 +1,8 @@
+services:
+  valse-roem:
+    build: .
+    image: valse-roem:latest
+    container_name: valse-roem
+    ports:
+      - "8790:80"
+    restart: unless-stopped

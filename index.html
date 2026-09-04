@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Valse Roem</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♣</text></svg>">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <h1>♣ Valse Roem <small>klaverjas-trainer</small></h1>
+  <nav class="tabs">
+    <button data-tab="spelen" class="active">Spelen</button>
+    <button data-tab="lessen">Lessen</button>
+    <button data-tab="oefenen">Oefenen</button>
+    <button data-tab="competitie">Competitie</button>
+    <button data-tab="stats">Statistieken</button>
+    <button data-tab="instellingen">Instellingen</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ================= SPELEN ================= -->
+  <section id="tab-spelen" class="tab active">
+    <div class="game">
+      <aside class="panel info">
+        <div id="scoreboard"></div>
+        <div id="dealinfo"></div>
+        <div class="btns">
+          <button id="btn-hint" class="primary">Hint</button>
+          <button id="btn-tricks">Slagen</button>
+          <button id="btn-newboom">Nieuwe boom</button>
+        </div>
+        <div id="tricklist" class="tricklist" hidden></div>
+      </aside>
+      <div class="table" id="table">
+        <div class="seat north" id="seat-2"></div>
+        <div class="seat west" id="seat-1"></div>
+        <div class="seat east" id="seat-3"></div>
+        <div class="center" id="center"></div>
+        <div class="seat south" id="seat-0"></div>
+      </div>
+      <aside class="panel coach">
+        <h3>Coach</h3>
+        <div id="coachlog" class="coachlog"></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ================= LESSEN ================= -->
+  <section id="tab-lessen" class="tab">
+    <div class="two-col">
+      <nav id="lessonnav" class="lessonnav"></nav>
+      <article id="lessonbody" class="lesson"></article>
+    </div>
+  </section>
+
+  <!-- ================= OEFENEN ================= -->
+  <section id="tab-oefenen" class="tab">
+    <nav class="subtabs">
+      <button data-sub="scenario" class="active">Scenario's</button>
+      <button data-sub="bied">Bied-drill</button>
+      <button data-sub="zet">Zet-drill</button>
+      <button data-sub="tel">Tel-drill</button>
+    </nav>
+    <div id="sub-scenario" class="sub active"></div>
+    <div id="sub-bied" class="sub"></div>
+    <div id="sub-zet" class="sub"></div>
+    <div id="sub-tel" class="sub"></div>
+  </section>
+
+  <!-- ================= COMPETITIE ================= -->
+  <section id="tab-competitie" class="tab">
+    <div id="competitie"></div>
+  </section>
+
+  <!-- ================= STATISTIEKEN ================= -->
+  <section id="tab-stats" class="tab">
+    <div id="stats"></div>
+  </section>
+
+  <!-- ================= INSTELLINGEN ================= -->
+  <section id="tab-instellingen" class="tab">
+    <div id="settings"></div>
+  </section>
+</main>
+
+<script src="js/cards.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/game.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/coach.js"></script>
+<script src="js/lessons.js"></script>
+<script src="js/quiz.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
