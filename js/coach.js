@@ -172,7 +172,7 @@
     const d = Coach.describe(v);
     const bestReason = an.reasons[best.card], playedReason = an.reasons[card];
     // alleen een fout noemen als het verschil duidelijk boven de simulatieruis uitkomt
-    let grade = loss >= Math.max(12, 2.5 * se) ? 'fout' : loss >= Math.max(5, 2 * se) ? 'onnauwkeurig' : 'goed';
+    let grade = loss >= Math.max(15, 3 * se) ? 'fout' : loss >= Math.max(8, 2.5 * se) ? 'onnauwkeurig' : 'goed';
     if (an.evals.length === 1) grade = 'goed';
     let cat = Coach.reasonCat(bestReason);
     // roem tegen: gaf de gespeelde kaart roem aan de tegenpartij die te vermijden was?

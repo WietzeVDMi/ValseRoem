@@ -59,7 +59,7 @@
   /* =====================================================================
      SPELEN
      ===================================================================== */
-  let game = null, gen = 0, reviews = [], pending = null, shownTrick = null, hintCard = null, busy = false;
+  let game = null, gen = 0, reviews = [], pending = null, shownTrick = null, hintCard = null, busy = false, waiting = false, timer = null;
 
   function log(type, html, situation) {
     const el = document.createElement('div');
@@ -86,12 +86,13 @@
     schedule(advance, settings.speed);
   }
 
-  function schedule(fn, ms) { const g = gen; setTimeout(() => { if (g === gen) fn(); }, ms); }
+  function schedule(fn, ms) { const g = gen; clearTimeout(timer); timer = setTimeout(() => { if (g === gen) fn(); }, ms); }
 
   function advance() {
     if (!game) return;
+    waiting = false;
     if (game.phase === 'bidding') {
-      if (game.turn === 0) { render(); return; }
+      if (game.turn === 0) { waiting = true; render(); return; }
       const seat = game.turn;
       const suit = AI.decideBid(game, seat, levelOf(seat));
       const r = game.bid(seat, suit);
@@ -103,7 +104,7 @@
       return;
     }
     if (game.phase === 'playing') {
-      if (game.turn === 0) { prepareUserTurn(); render(); return; }
+      if (game.turn === 0) { waiting = true; prepareUserTurn(); render(); return; }
       const seat = game.turn;
       const card = AI.chooseCard(game, seat, levelOf(seat), policies());
       playCard(seat, card);
@@ -207,12 +208,13 @@
       info += `<div>Laatste spel: ${r.score[0]} – ${r.score[1]}${r.nat ? ' (nat)' : ''}${r.pit >= 0 ? ' (pit)' : ''}</div>`;
     }
     $('#dealinfo').innerHTML = `<div class="dealinfo">${info}</div>`;
-    $('#btn-hint').disabled = !(game.phase === 'playing' && game.turn === 0 && !busy) && !(game.phase === 'bidding' && game.turn === 0);
+    $('#btn-hint').disabled = !waiting || game.turn !== 0 || busy;
   }
 
   function renderSeat(s) {
     const el = $('#seat-' + s);
     const isTurn = (game.phase === 'bidding' || game.phase === 'playing') && game.turn === s && !shownTrick;
+    const userMayAct = waiting && game.turn === 0 && !busy && !shownTrick;
     const tags = [];
     if (game.dealer === s) tags.push('deler');
     if (game.playerSeat === s) tags.push('speler');
@@ -220,7 +222,7 @@
     let html = `<div class="name${isTurn ? ' turn' : ''}">${esc(settings.names[s])} <span class="lvl">${lvl}</span>${tags.map((t) => `<span class="tag">${t}</span>`).join('')}</div>`;
     if (s === 0) {
       const hand = KJ.sortHand(game.hands[0], game.trump);
-      const legal = game.phase === 'playing' && game.turn === 0 && !busy && !shownTrick ? game.legalMoves(0) : null;
+      const legal = game.phase === 'playing' && userMayAct ? game.legalMoves(0) : null;
       html += `<div class="hand">${hand.map((c) => cardHtml(c, legal ? (legal.includes(c) ? 'legal' : 'illegal') : '', game.trump) ).join('')}</div>`;
     } else {
       html += `<div class="backs">${backHtml().repeat(game.hands[s].length)}</div>`;
@@ -243,7 +245,7 @@
       html += `<div class="slot ${p}">${t ? cardHtml(t.card, win, game.trump) : ''}</div>`;
     }
     let msg = '';
-    if (game.phase === 'bidding' && game.turn === 0) {
+    if (game.phase === 'bidding' && game.turn === 0 && waiting) {
       html += renderBidBox();
     } else if (game.phase === 'bidding') msg = `${esc(settings.names[game.turn])} denkt na...`;
     else if (game.phase === 'playing' && game.turn === 0 && !shownTrick) msg = game.trick.length ? 'Jij bent aan de beurt.' : 'Jij komt uit.';
@@ -282,7 +284,8 @@
 
   /* ---------- acties ---------- */
   function onUserBid(suit) {
-    if (game.phase !== 'bidding' || game.turn !== 0) return;
+    if (game.phase !== 'bidding' || game.turn !== 0 || !waiting) return;
+    waiting = false;
     const adv = Coach.bidAdvice(game, 0);
     const round = game.round;
     const r = game.bid(0, suit);
@@ -297,15 +300,16 @@
   }
 
   function onUserCard(card) {
-    if (!game || game.phase !== 'playing' || game.turn !== 0 || busy || shownTrick) return;
+    if (!game || game.phase !== 'playing' || game.turn !== 0 || busy || shownTrick || !waiting) return;
     if (!game.legalMoves(0).includes(card)) return;
+    waiting = false;
     playCard(0, card);
   }
 
   $('#btn-hint').addEventListener('click', () => {
     if (!game) return;
     if (game.phase === 'bidding' && game.turn === 0) { showBidAdvice(); return; }
-    if (game.phase !== 'playing' || game.turn !== 0 || busy) return;
+    if (game.phase !== 'playing' || game.turn !== 0 || busy || !waiting) return;
     const v = game.view(0);
     const h = Coach.hint(v, policies(), settings.samples);
     const key = game.dealNo + ':' + game.tricks.length + ':' + game.trick.length;
@@ -501,12 +505,190 @@
      COMPETITIE
      ===================================================================== */
   function seriesWins(s) { const w = s.baseWins.slice(); for (const b of s.booms) w[b.winner]++; return w; }
+  const pairName = (p) => p.join(' & ');
+
+  // ---- scoreblad: per ronde schrijven tijdens een echte boom
+  const ROEM_CHIPS = [['driekaart', 20], ['vierkaart', 50], ['stuk', 20], ['vier gelijke', 100], ['vier boeren', 200], ['pit', 100]];
+  function emptySheet() { return { date: new Date().toISOString().slice(0, 10), firstDealer: 0, rows: Array.from({ length: 16 }, () => ({ pa: '', ra: '', pb: '', rb: '', ta: [], tb: [], auto: null, status: '' })) }; }
+  function sheetTotals(sheet) {
+    let a = 0, b = 0, filled = 0;
+    const run = sheet.rows.map((r) => {
+      const ra = (+r.pa || 0) + (+r.ra || 0), rb = (+r.pb || 0) + (+r.rb || 0);
+      if (r.pa !== '' || r.pb !== '') filled++;
+      a += ra; b += rb;
+      return [a, b];
+    });
+    return { a, b, filled, run };
+  }
+  const sheetDealers = (cur) => [cur.pairs[0][0], cur.pairs[1][0], cur.pairs[0][1], cur.pairs[1][1]];
+  const rowStatus = (r) => (r.status === 'natA' ? 'A nat' : r.status === 'natB' ? 'B nat' : r.status === 'verzaakA' ? 'A verzaakt' : r.status === 'verzaakB' ? 'B verzaakt' : '');
+  function renderSheet(cur) {
+    const sheet = comp.sheet || (comp.sheet = emptySheet());
+    for (const r of sheet.rows) { r.ta = r.ta || []; r.tb = r.tb || []; r.status = r.status || ''; }
+    const dealers = sheetDealers(cur);
+    const t = sheetTotals(sheet);
+    let rows = '';
+    sheet.rows.forEach((r, i) => {
+      rows += `<tr data-i="${i}" class="${r.status ? 'st' : ''}">
+      <td class="nr">${i + 1}<div class="dealer">${esc(dealers[(sheet.firstDealer + i) % 4])}</div></td>
+      <td><input type="number" inputmode="numeric" data-f="pa" value="${r.pa}"></td><td class="roemcell" data-open="${i}"><span class="rv ra">${r.ra ? '+' + r.ra : ''}</span><div class="tags">${r.ta.map(esc).join(' + ')}</div></td>
+      <td><input type="number" inputmode="numeric" data-f="pb" value="${r.pb}"></td><td class="roemcell" data-open="${i}"><span class="rv rb">${r.rb ? '+' + r.rb : ''}</span><div class="tags">${r.tb.map(esc).join(' + ')}</div></td>
+      <td class="natbtns"><button data-roem="${i}" title="roem, nat of verzaken">⋯</button><div class="tags status">${rowStatus(r)}</div></td></tr>`;
+      if ((i + 1) % 4 === 0) {
+        const [sa, sb] = t.run[i];
+        const diff = sa - sb;
+        rows += `<tr class="subtotal"><td>${i + 1}</td><td class="tot" colspan="2">${sa}</td><td class="tot" colspan="2">${sb}</td><td><small>${diff === 0 ? 'gelijk' : (diff > 0 ? 'A' : 'B') + ' +' + Math.abs(diff)}</small></td></tr>`;
+      }
+    });
+    return `<div class="box sheet"><h3>Boom schrijven</h3>
+      <div class="form" style="max-width:760px;grid-template-columns:auto 1fr auto 1fr auto">
+        <label>Datum</label><input type="date" id="sheet-date" value="${sheet.date}">
+        <label>Eerste deler</label><select id="sheet-dealer">${dealers.map((d, i) => `<option value="${i}" ${sheet.firstDealer === i ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select>
+        <button id="sheet-lot">Lootje trekken</button>
+      </div>
+      <div id="sheet-lotmsg"></div>
+      <p><small>Vul per ronde de punten in (de 162 inclusief de 10 van de laatste slag). Vul je één kant in, dan wordt de andere kant automatisch aangevuld tot 162. Tik op de roem-kolom of op <b>⋯</b> om roem aan te vinken (driekaart, stuk, pit...), of om nat of verzaken te noteren. A = ${esc(pairName(cur.pairs[0]))}, B = ${esc(pairName(cur.pairs[1]))}. Het blad wordt automatisch bewaard.</small></p>
+      <div class="standbar"><span>A ${esc(pairName(cur.pairs[0]))}</span><b id="sheet-ta">${t.a}</b><span class="dash">–</span><b id="sheet-tb">${t.b}</b><span>B ${esc(pairName(cur.pairs[1]))}</span></div>
+      <div style="overflow-x:auto"><table class="tbl sheettbl">
+        <tr><th>#</th><th colspan="2">A: ${esc(pairName(cur.pairs[0]))}</th><th colspan="2">B: ${esc(pairName(cur.pairs[1]))}</th><th></th></tr>
+        <tr><th></th><th>punten</th><th>roem</th><th>punten</th><th>roem</th><th></th></tr>
+        ${rows}
+        <tr class="total"><td><b>Tot.</b></td><td class="tot" colspan="2" id="sheet-ta2">${t.a}</td><td class="tot" colspan="2" id="sheet-tb2">${t.b}</td><td></td></tr>
+      </table></div>
+      <div class="btns"><button class="primary" id="sheet-finish">Boom afsluiten en bij de stand zetten</button><button id="sheet-clear">Blad leegmaken</button></div>
+      <div id="sheet-msg"></div></div>
+      <div id="roem-modal" class="modal" hidden></div>`;
+  }
+  function bindSheet(root, cur) {
+    const sheet = comp.sheet;
+    const tbl = $('.sheettbl', root);
+    const dealers = sheetDealers(cur);
+    const refresh = () => {
+      const t = sheetTotals(sheet);
+      $$('tr[data-i]', tbl).forEach((tr) => {
+        const i = +tr.dataset.i, r = sheet.rows[i], on = r.pa !== '' || r.pb !== '';
+        $('.rv.ra', tr).textContent = r.ra ? '+' + r.ra : ''; $('.rv.rb', tr).textContent = r.rb ? '+' + r.rb : '';
+        $$('.tags', tr)[0].textContent = r.ta.join(' + '); $$('.tags', tr)[1].textContent = r.tb.join(' + ');
+        $('.status', tr).textContent = rowStatus(r);
+        tr.classList.toggle('st', !!r.status);
+        for (const f of ['pa', 'pb']) { const inp = $(`input[data-f="${f}"]`, tr); if (inp.value !== r[f]) inp.value = r[f]; }
+      });
+      $$('tr.subtotal', tbl).forEach((tr, k) => {
+        const [sa, sb] = t.run[k * 4 + 3], diff = sa - sb;
+        const tds = $$('.tot', tr); tds[0].textContent = sa; tds[1].textContent = sb;
+        $('small', tr).textContent = diff === 0 ? 'gelijk' : (diff > 0 ? 'A' : 'B') + ' +' + Math.abs(diff);
+      });
+      $('#sheet-ta').textContent = t.a; $('#sheet-tb').textContent = t.b; $('#sheet-ta2').textContent = t.a; $('#sheet-tb2').textContent = t.b;
+      save('vr_comp', comp);
+    };
+    const complement = (r, f, tr) => {
+      const other = f === 'pa' ? 'pb' : 'pa';
+      if (r.auto === f) r.auto = null;
+      if (r[other] === '' || r.auto === other) {
+        if (r[f] !== '' && +r[f] >= 0 && +r[f] <= 162) { r[other] = String(162 - +r[f]); r.auto = other; }
+        else if (r[f] === '' && r.auto === other) { r[other] = ''; r.auto = null; }
+      }
+    };
+    $$('tr[data-i] input', tbl).forEach((inp) => {
+      inp.addEventListener('input', () => {
+        const tr = inp.closest('tr'), i = +tr.dataset.i, r = sheet.rows[i], f = inp.dataset.f;
+        r[f] = inp.value;
+        if (r.status) r.status = '';
+        complement(r, f, tr);
+        refresh();
+      });
+    });
+    // ---- modal per ronde: roem, nat, verzaken
+    const modal = $('#roem-modal', root);
+    const openModal = (i) => {
+      const r = sheet.rows[i];
+      const side = (s, name) => {
+        const rf = s === 'a' ? 'ra' : 'rb', tf = s === 'a' ? 'ta' : 'tb';
+        return `<div class="mside"><h4>${s.toUpperCase()}: ${esc(name)}</h4>
+          <div class="mrow"><label>Punten</label><input type="number" inputmode="numeric" data-mf="${s === 'a' ? 'pa' : 'pb'}" value="${r[s === 'a' ? 'pa' : 'pb']}"></div>
+          <div class="mrow"><label>Roem</label><input type="number" inputmode="numeric" data-mf="${rf}" value="${r[rf]}" placeholder="0"></div>
+          <div class="chips">${ROEM_CHIPS.map(([l, v]) => `<button data-chip="${s}" data-v="${v}" data-l="${l}">${l} +${v}</button>`).join('')}<button data-undo="${s}" title="laatste ongedaan maken">↶ ongedaan</button></div>
+          <div class="tags" data-tags="${s}">${r[tf].map(esc).join(' + ')}</div>
+          <div class="btns"><button data-status="nat${s.toUpperCase()}" class="${r.status === 'nat' + s.toUpperCase() ? 'primary' : ''}">${esc(name)} nat</button><button data-status="verzaak${s.toUpperCase()}" class="${r.status === 'verzaak' + s.toUpperCase() ? 'primary' : ''}">${esc(name)} verzaakt</button></div>
+        </div>`;
+      };
+      modal.innerHTML = `<div class="mbox"><div class="mhead"><h3>Ronde ${i + 1} · deler ${esc(dealers[(sheet.firstDealer + i) % 4])}</h3><button data-close>Sluiten</button></div>
+        <div class="msides">${side('a', pairName(cur.pairs[0]))}${side('b', pairName(cur.pairs[1]))}</div>
+        <p><small>Nat: de spelende partij haalt niet meer dan de helft; alle 162 punten en alle roem gaan naar de tegenpartij. Verzaken: idem, alle punten en roem naar de tegenpartij. Klik nogmaals om ongedaan te maken.</small></p></div>`;
+      modal.hidden = false;
+      const sync = () => {
+        for (const f of ['pa', 'ra', 'pb', 'rb']) { const inp = $(`input[data-mf="${f}"]`, modal); if (inp && inp.value !== r[f]) inp.value = r[f]; }
+        $('[data-tags="a"]', modal).textContent = r.ta.join(' + '); $('[data-tags="b"]', modal).textContent = r.tb.join(' + ');
+        $$('button[data-status]', modal).forEach((b) => b.classList.toggle('primary', b.dataset.status === r.status));
+        refresh();
+      };
+      $$('input[data-mf]', modal).forEach((inp) => inp.addEventListener('input', () => {
+        const f = inp.dataset.mf; r[f] = inp.value;
+        if (f === 'pa' || f === 'pb') { if (r.status) r.status = ''; complement(r, f); }
+        sync();
+      }));
+      $$('button[data-chip]', modal).forEach((b) => b.addEventListener('click', () => {
+        const s = b.dataset.chip, rf = s === 'a' ? 'ra' : 'rb', tf = s === 'a' ? 'ta' : 'tb';
+        r[rf] = String((+r[rf] || 0) + +b.dataset.v); r[tf].push(b.dataset.l);
+        if (r.status) applyStatus(r, r.status); // roem bij nat/verzaken gaat naar de tegenpartij
+        sync();
+      }));
+      $$('button[data-undo]', modal).forEach((b) => b.addEventListener('click', () => {
+        const s = b.dataset.undo, rf = s === 'a' ? 'ra' : 'rb', tf = s === 'a' ? 'ta' : 'tb';
+        const last = r[tf].pop();
+        if (last) { const v = (ROEM_CHIPS.find((c) => c[0] === last) || [0, 0])[1]; r[rf] = String(Math.max(0, (+r[rf] || 0) - v)); }
+        sync();
+      }));
+      $$('button[data-status]', modal).forEach((b) => b.addEventListener('click', () => {
+        const st = b.dataset.status;
+        if (r.status === st) { r.status = ''; r.pa = ''; r.pb = ''; r.auto = null; }
+        else applyStatus(r, st);
+        sync();
+      }));
+      $('[data-close]', modal).addEventListener('click', () => { modal.hidden = true; });
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
+    };
+    // nat/verzaken: verliezende partij 0 punten en 0 roem, de ander 162 + alle roem
+    const applyStatus = (r, st) => {
+      const loser = st.endsWith('A') ? 'a' : 'b';
+      const roem = (+r.ra || 0) + (+r.rb || 0);
+      const tags = r.ta.concat(r.tb);
+      if (loser === 'a') { r.pa = '0'; r.ra = '0'; r.ta = []; r.pb = '162'; r.rb = String(roem); r.tb = tags; }
+      else { r.pb = '0'; r.rb = '0'; r.tb = []; r.pa = '162'; r.ra = String(roem); r.ta = tags; }
+      r.auto = null; r.status = st;
+    };
+    $$('button[data-roem]', tbl).forEach((b) => b.addEventListener('click', () => openModal(+b.dataset.roem)));
+    $$('td[data-open]', tbl).forEach((td) => td.addEventListener('click', () => openModal(+td.dataset.open)));
+    $('#sheet-lot').addEventListener('click', () => {
+      const pick = Math.floor(Math.random() * 4);
+      sheet.firstDealer = pick; save('vr_comp', comp);
+      renderComp();
+      $('#sheet-lotmsg').innerHTML = `<div class="feedback goed">Lootje getrokken: <b>${esc(dealers[pick])}</b> deelt als eerste.</div>`;
+    });
+    $('#sheet-date').addEventListener('change', (e) => { sheet.date = e.target.value; save('vr_comp', comp); });
+    $('#sheet-dealer').addEventListener('change', (e) => { sheet.firstDealer = +e.target.value; save('vr_comp', comp); renderComp(); });
+    $('#sheet-clear').addEventListener('click', () => { if (confirm('Scoreblad leegmaken?')) { comp.sheet = emptySheet(); save('vr_comp', comp); renderComp(); } });
+    $('#sheet-finish').addEventListener('click', () => {
+      const t = sheetTotals(sheet);
+      if (t.filled < 16 && !confirm(`Er zijn pas ${t.filled} van de 16 rondes ingevuld. Toch afsluiten?`)) return;
+      if (t.a === t.b) { $('#sheet-msg').innerHTML = '<small>Gelijkspel: geen winnaar.</small>'; return; }
+      const winner = t.a > t.b ? 0 : 1;
+      cur.booms.push({ date: sheet.date, winner, scores: [t.a, t.b], rows: sheet.rows });
+      const hi = Math.max(t.a, t.b);
+      if (hi > comp.record.score) comp.record = { score: hi, pair: cur.pairs[winner] };
+      const ww = seriesWins(cur);
+      if (ww[winner] >= 10) cur.finished = true;
+      comp.sheet = emptySheet();
+      save('vr_comp', comp); renderComp();
+      if (cur.finished) alert(`${pairName(cur.pairs[winner])} heeft de serie gewonnen met ${ww[0]}-${ww[1]}! Start een nieuwe serie met andere koppels.`);
+    });
+  }
+
   function renderComp() {
     const root = $('#competitie');
     const cur = comp.series[comp.series.length - 1];
     const w = seriesWins(cur);
-    const pairName = (p) => p.join(' & ');
-    let html = `<div class="cards-grid">
+    let html = renderSheet(cur) + `<div class="cards-grid" style="margin-top:1em">
       <div class="box"><h3>Huidige stand</h3>
         <div class="big">${w[0]} – ${w[1]}</div>
         <div>${esc(pairName(cur.pairs[0]))} tegen ${esc(pairName(cur.pairs[1]))}</div>
@@ -537,6 +719,7 @@
         <textarea id="comp-json" style="width:100%;height:80px;margin-top:.5em;font-size:.8rem" placeholder="JSON"></textarea>
       </div></div>`;
     root.innerHTML = html;
+    bindSheet(root, cur);
     $('#comp-add').addEventListener('click', () => {
       const winner = +$('#comp-winner').value;
       const s0 = +$('#comp-s0').value, s1 = +$('#comp-s1').value;
